@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: pr_assistant_app
+    depends_on:
+      - ollama
+    command: ["python", "main.py"]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: pr_assistant_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: ["ollama", "pull", "llama3.2:3b"]
+
+volumes:
+  ollama_data:
