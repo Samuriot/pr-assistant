@@ -31,14 +31,15 @@ def get_file_diff(commit: str) -> List[File]:
 
     # local vars to keep track while parsing
     files: List[File] = []
-    current: Optional[File] = None
-    old_line_no: Optional[int] = None
-    new_line_no: Optional[int] = None
+    current: Optional[file] = none
+    old_line_no: optional[int] = none
+    new_line_no: optional[int] = none
 
     # regex pattern for keeping track of new lines
     hunk_pattern = re.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
 
     for raw in process.stdout.splitlines():
+        # case 1: new file defined
         if raw.startswith("diff --git "):
             if current:
                 files.append(current)
@@ -56,13 +57,16 @@ def get_file_diff(commit: str) -> List[File]:
             old_line_no = None
             new_line_no = None
             continue
-
+        
+        # if there's no diff, continue through the lines
         if current is None:
             continue
-
+        
+        # if it's a binary, no need to handle, skip
         if raw.startswith("Binary files "):
             continue
-
+        
+        # case 2: hunk pattern matching
         hunk_match = hunk_pattern.match(raw)
         if hunk_match:
             old_start = int(hunk_match.group(1))
@@ -79,10 +83,12 @@ def get_file_diff(commit: str) -> List[File]:
             old_line_no = old_start
             new_line_no = new_start
             continue
-
+        
+        # disregard +++ & --- patterns
         if raw.startswith("+++") or raw.startswith("---"):
             continue
 
+        # case 3: file additions
         if raw.startswith("+"):
             if new_line_no is not None:
                 current.additions.append(
@@ -93,7 +99,8 @@ def get_file_diff(commit: str) -> List[File]:
                 )
                 new_line_no += 1
             continue
-
+        
+        # case 4: file deletions
         if raw.startswith("-"):
             if old_line_no is not None:
                 current.removals.append(
@@ -116,6 +123,3 @@ def get_file_diff(commit: str) -> List[File]:
 
     return files
 
-
-files = get_file_diff("HEAD~")
-print(files)
