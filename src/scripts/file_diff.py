@@ -1,13 +1,19 @@
 import re
 import subprocess
-
 from typing import List, Optional
+
 from pydantic import BaseModel
 
 
 class LineChange(BaseModel):
     line_number: int
     line_diff: str
+
+
+class Hunk(BaseModel):
+    start_line: int
+    header: str
+    lines: List[str]
 
 
 class File(BaseModel):
@@ -18,29 +24,23 @@ class File(BaseModel):
     new_len: int
     additions: List[LineChange]
     removals: List[LineChange]
+    hunks: List[Hunk]
 
 
-def get_file_diff(commit: str) -> List[File]:
-    """Return structured line additions/removals for a commit."""
-    process = subprocess.run(
-        ["git", "show", "-U0", "--no-color", "--no-ext-diff", commit],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-
-    # local vars to keep track while parsing
+def _parse_diff_output(output: str) -> List[File]:
     files: List[File] = []
-    current: Optional[file] = none
-    old_line_no: optional[int] = none
-    new_line_no: optional[int] = none
+    current: Optional[File] = None
+    current_hunk: Optional[Hunk] = None
+    old_line_no: Optional[int] = None
+    new_line_no: Optional[int] = None
 
-    # regex pattern for keeping track of new lines
     hunk_pattern = re.compile(r"^@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@")
 
-    for raw in process.stdout.splitlines():
-        # case 1: new file defined
+    for raw in output.splitlines():
         if raw.startswith("diff --git "):
+            if current_hunk:
+                current.hunks.append(current_hunk)  # type: ignore[arg-type]
+                current_hunk = None
             if current:
                 files.append(current)
             parts = raw.split()
@@ -53,22 +53,22 @@ def get_file_diff(commit: str) -> List[File]:
                 new_len=0,
                 additions=[],
                 removals=[],
+                hunks=[],
             )
             old_line_no = None
             new_line_no = None
             continue
-        
-        # if there's no diff, continue through the lines
+
         if current is None:
             continue
-        
-        # if it's a binary, no need to handle, skip
+
         if raw.startswith("Binary files "):
             continue
-        
-        # case 2: hunk pattern matching
+
         hunk_match = hunk_pattern.match(raw)
         if hunk_match:
+            if current_hunk:
+                current.hunks.append(current_hunk)
             old_start = int(hunk_match.group(1))
             old_len = int(hunk_match.group(2) or 1)
             new_start = int(hunk_match.group(3))
@@ -82,13 +82,15 @@ def get_file_diff(commit: str) -> List[File]:
 
             old_line_no = old_start
             new_line_no = new_start
+            current_hunk = Hunk(start_line=new_start, header=raw, lines=[raw])
             continue
-        
-        # disregard +++ & --- patterns
+
         if raw.startswith("+++") or raw.startswith("---"):
             continue
 
-        # case 3: file additions
+        if current_hunk:
+            current_hunk.lines.append(raw)
+
         if raw.startswith("+"):
             if new_line_no is not None:
                 current.additions.append(
@@ -99,8 +101,7 @@ def get_file_diff(commit: str) -> List[File]:
                 )
                 new_line_no += 1
             continue
-        
-        # case 4: file deletions
+
         if raw.startswith("-"):
             if old_line_no is not None:
                 current.removals.append(
@@ -112,14 +113,40 @@ def get_file_diff(commit: str) -> List[File]:
                 old_line_no += 1
             continue
 
-        # Context line
         if old_line_no is not None:
             old_line_no += 1
         if new_line_no is not None:
             new_line_no += 1
 
+    if current_hunk and current:
+        current.hunks.append(current_hunk)
     if current:
         files.append(current)
 
     return files
 
+
+def get_file_diff(commit: str) -> List[File]:
+    """Return structured line additions/removals and raw hunks for a commit."""
+
+    process = subprocess.run(
+        ["git", "show", "-U3", "--no-color", "--no-ext-diff", commit],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    return _parse_diff_output(process.stdout)
+
+
+def get_worktree_diff() -> List[File]:
+    """Return structured diff for unstaged/staged changes in the working tree."""
+
+    process = subprocess.run(
+        ["git", "diff", "-U3", "--no-color", "--no-ext-diff"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    return _parse_diff_output(process.stdout)
