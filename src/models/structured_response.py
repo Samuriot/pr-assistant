@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -20,3 +20,32 @@ class CodeReview(BaseModel):
     summarized_comments: str = Field(
         description="Summary of all comments for user to view"
     )
+
+
+class ReviewerResponse(BaseModel):
+    """Structured response from the Code Reviewer agent for a single hunk."""
+
+    needs_comment: bool = Field(description="Whether a comment is warranted")
+    severity: str = Field(
+        description="Severity level of the issue",
+        pattern="^(nit|minor|major|blocker)$",
+    )
+    issue: str = Field(description="Description of the identified issue")
+    impact: str = Field(description="Impact of the issue on code quality")
+    ask_coder: bool = Field(
+        description="Whether to delegate fix generation to the coding agent"
+    )
+    coder_request: Optional[str] = Field(
+        default=None, description="Precise request for coder if ask_coder is True"
+    )
+    suggestion: Optional[str] = Field(
+        default=None, description="Initial suggestion or placeholder"
+    )
+    line: int = Field(description="Line number where comment should be placed")
+
+
+class CoderResponse(BaseModel):
+    """Structured response from the Coding agent."""
+
+    snippet: str = Field(description="The code fix or implementation snippet")
+    rationale: str = Field(description="Explanation of the fix")

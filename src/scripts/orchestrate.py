@@ -14,7 +14,6 @@ Dependencies: strands, your existing LocalAgent wrapper, agent_init helpers.
 
 from __future__ import annotations
 
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +21,11 @@ from typing import Dict, Iterable, List, Optional
 
 from src.scripts.agent_init import setup_strands_agents
 from src.scripts.file_diff import get_file_diff
-from src.models.structured_response import CodeComment
+from src.models.structured_response import (
+    CodeComment,
+    CoderResponse,
+    ReviewerResponse,
+)
 
 
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -55,36 +58,36 @@ def _build_reviewer_prompt(hunk: DiffHunk, min_severity: str) -> str:
     return (
         "You are the code review agent. Analyze the provided diff hunk and "
         "decide if a comment is warranted. If you need a concrete fix snippet, "
-        "you may delegate to the Coding Agent. Respond with JSON only.\n"
+        "you may delegate to the Coding Agent.\n"
         "Input context:\n"
         f"- file: {hunk.file_path}\n"
         f"- start_line: {hunk.start_line}\n"
         f"- existing_thread: {prior or 'none'}\n"
         "- diff hunk:\n"
         f"{hunk.hunk}\n\n"
-        "Output JSON schema:\n"
-        "{\n"
-        "  'needs_comment': bool,\n"
-        "  'severity': 'nit'|'minor'|'major'|'blocker',\n"
-        "  'issue': str,\n"
-        "  'impact': str,\n"
-        "  'ask_coder': bool,\n"
-        "  'coder_request': str | null,  # precise ask if ask_coder\n"
-        "  'suggestion': str | null,     # may be placeholder before coder reply\n"
-        "  'line': int                   # line number for the comment\n"
-        "}\n"
-        f"Enforce min severity: {min_severity}. If below threshold, set "
+        "Provide your response as a structured object with these fields:\n"
+        "- needs_comment (bool): Whether a comment is warranted\n"
+        "- severity (str): One of 'nit', 'minor', 'major', 'blocker'\n"
+        "- issue (str): Description of the identified issue\n"
+        "- impact (str): Impact of the issue on code quality\n"
+        "- ask_coder (bool): Whether to delegate fix generation to coding agent\n"
+        "- coder_request (str or null): Precise ask for coder if ask_coder is true\n"
+        "- suggestion (str or null): Initial suggestion or placeholder\n"
+        "- line (int): Line number where comment should be placed\n\n"
+        f"Enforce minimum severity: {min_severity}. If below threshold, set "
         "needs_comment=false."
     )
 
 
 def _build_coder_prompt(hunk: DiffHunk, request: str) -> str:
     return (
-        "You are the coding agent. Provide a concise fix snippet only.\n"
+        "You are the coding agent. Provide a concise fix snippet.\n"
         f"File: {hunk.file_path}\n"
         f"Diff hunk:\n{hunk.hunk}\n\n"
-        f"Task: {request}\n"
-        "Respond with JSON: { 'snippet': str, 'rationale': str }"
+        f"Task: {request}\n\n"
+        "Provide your response as a structured object with these fields:\n"
+        "- snippet (str): The code fix or implementation snippet\n"
+        "- rationale (str): Explanation of the fix"
     )
 
 
@@ -183,47 +186,51 @@ def orchestrate(
             continue
 
         prompt = _build_reviewer_prompt(hunk, review_request.min_severity)
-        review_raw = reviewer["agent"](prompt, system_prompt=reviewer["prompt"])
         try:
-            review = json.loads(str(review_raw))
-        except json.JSONDecodeError:
+            review = reviewer["agent"].structured_output(
+                output_model=ReviewerResponse,
+                prompt=f"{reviewer['prompt']}\n\n{prompt}",
+            )
+        except Exception:
             continue
 
-        if not review.get("needs_comment"):
+        if not review.needs_comment:
             continue
 
-        severity = review.get("severity", "minor")
-        if not _should_emit(severity, review_request.min_severity):
+        if not _should_emit(review.severity, review_request.min_severity):
             continue
 
-        suggestion = review.get("suggestion")
+        suggestion = review.suggestion
         rationale = None
-        if review.get("ask_coder") and review.get("coder_request"):
-            coder_prompt = _build_coder_prompt(hunk, review["coder_request"])
-            coder_raw = coder["agent"](coder_prompt, system_prompt=coder["prompt"])
+        if review.ask_coder and review.coder_request:
+            coder_prompt = _build_coder_prompt(hunk, review.coder_request)
             try:
-                coder_resp = json.loads(str(coder_raw))
-                suggestion = coder_resp.get("snippet") or suggestion
-                rationale = coder_resp.get("rationale")
-            except json.JSONDecodeError:
+                coder_resp = coder["agent"].structured_output(
+                    output_model=CoderResponse,
+                    prompt=f"{coder['prompt']}\n\n{coder_prompt}",
+                )
+                suggestion = coder_resp.snippet or suggestion
+                rationale = coder_resp.rationale
+            except Exception:
                 rationale = None
 
         body_lines = [
-            f"Issue: {review.get('issue', '').strip()}",
-            f"Impact: {review.get('impact', '').strip()}",
+            f"Issue: {review.issue.strip()}",
+            f"Impact: {review.impact.strip()}",
         ]
         if suggestion:
             body_lines.append(f"Suggestion:\n{suggestion}")
         if rationale:
             body_lines.append(f"Rationale: {rationale}")
 
-        severity = review.get("severity", "minor")
-        print(f"  → Issue found: {severity.upper()}", file=sys.stderr, flush=True)
+        print(
+            f"  → Issue found: {review.severity.upper()}", file=sys.stderr, flush=True
+        )
 
         comments.append(
             CodeComment(
                 file_name=hunk.file_path,
-                line_number=review.get("line") or hunk.start_line,
+                line_number=review.line,
                 review="\n".join(body_lines).strip(),
             )
         )
