@@ -69,3 +69,40 @@ def setup_strands_agents(
         }
 
     return agents
+
+def build_reviewer_prompt(hunk: DiffHunk, min_severity: str) -> str:
+    prior = "\n".join(hunk.existing_comments or [])
+    return (
+        "You are the code review agent. Analyze the provided diff hunk and "
+        "decide if a comment is warranted. If you need a concrete fix snippet, "
+        "you may delegate to the Coding Agent.\n"
+        "Input context:\n"
+        f"- file: {hunk.file_path}\n"
+        f"- start_line: {hunk.start_line}\n"
+        f"- existing_thread: {prior or 'none'}\n"
+        "- diff hunk:\n"
+        f"{hunk.hunk}\n\n"
+        "Provide your response as a structured object with these fields:\n"
+        "- needs_comment (bool): Whether a comment is warranted\n"
+        "- severity (str): One of 'nit', 'minor', 'major', 'blocker'\n"
+        "- issue (str): Description of the identified issue\n"
+        "- impact (str): Impact of the issue on code quality\n"
+        "- ask_coder (bool): Whether to delegate fix generation to coding agent\n"
+        "- coder_request (str or null): Precise ask for coder if ask_coder is true\n"
+        "- suggestion (str or null): Initial suggestion or placeholder\n"
+        "- line (int): Line number where comment should be placed\n\n"
+        f"Enforce minimum severity: {min_severity}. If below threshold, set "
+        "needs_comment=false."
+    )
+
+
+def build_coder_prompt(hunk: DiffHunk, request: str) -> str:
+    return (
+        "You are the coding agent. Provide a concise fix snippet.\n"
+        f"File: {hunk.file_path}\n"
+        f"Diff hunk:\n{hunk.hunk}\n\n"
+        f"Task: {request}\n\n"
+        "Provide your response as a structured object with these fields:\n"
+        "- snippet (str): The code fix or implementation snippet\n"
+        "- rationale (str): Explanation of the fix"
+    )

@@ -11,16 +11,15 @@ class CodeComment(BaseModel):
     review: str = Field(description="Suggestions provided by LLM to improve code")
 
 
-class CodeReview(BaseModel):
-    """Model that holds the structure for agent response."""
-
-    score: int = Field(description="Score out of 100")
-    summary: str = Field(description="Summary of PR changes")
-    comments: List[CodeComment] = Field(description="List of all comments in PR")
-    summarized_comments: str = Field(
-        description="Summary of all comments for user to view"
-    )
-
+#class CodeReview(BaseModel):
+#    """Model that holds the structure for agent response."""
+#
+ #   score: int = Field(description="Score out of 100")
+  #  summary: str = Field(description="Summary of PR changes")
+   # comments: List[CodeComment] = Field(description="List of all comments in PR")
+    #summarized_comments: str = Field(
+     #   description="Summary of all comments for user to view"
+    #)
 
 class ReviewerResponse(BaseModel):
     """Structured response from the Code Reviewer agent for a single hunk."""

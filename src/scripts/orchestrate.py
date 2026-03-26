@@ -15,18 +15,17 @@ Dependencies: strands, your existing LocalAgent wrapper, agent_init helpers.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
 
-from src.scripts.agent_init import setup_strands_agents
+from src.scripts.agent_init import setup_strands_agents, build_reviewer_prompt, build_coder_prompt
 from src.scripts.file_diff import get_file_diff
 from src.models.structured_response import (
     CodeComment,
     CoderResponse,
     ReviewerResponse,
 )
-
 
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
@@ -47,49 +46,9 @@ class ReviewRequest:
     max_comments: int = 15
     min_severity: str = "minor"  # options: nit, minor, major, blocker
 
-
 def _should_emit(severity: str, min_severity: str) -> bool:
     order = {"nit": 0, "minor": 1, "major": 2, "blocker": 3}
     return order.get(severity, 1) >= order.get(min_severity, 1)
-
-
-def _build_reviewer_prompt(hunk: DiffHunk, min_severity: str) -> str:
-    prior = "\n".join(hunk.existing_comments or [])
-    return (
-        "You are the code review agent. Analyze the provided diff hunk and "
-        "decide if a comment is warranted. If you need a concrete fix snippet, "
-        "you may delegate to the Coding Agent.\n"
-        "Input context:\n"
-        f"- file: {hunk.file_path}\n"
-        f"- start_line: {hunk.start_line}\n"
-        f"- existing_thread: {prior or 'none'}\n"
-        "- diff hunk:\n"
-        f"{hunk.hunk}\n\n"
-        "Provide your response as a structured object with these fields:\n"
-        "- needs_comment (bool): Whether a comment is warranted\n"
-        "- severity (str): One of 'nit', 'minor', 'major', 'blocker'\n"
-        "- issue (str): Description of the identified issue\n"
-        "- impact (str): Impact of the issue on code quality\n"
-        "- ask_coder (bool): Whether to delegate fix generation to coding agent\n"
-        "- coder_request (str or null): Precise ask for coder if ask_coder is true\n"
-        "- suggestion (str or null): Initial suggestion or placeholder\n"
-        "- line (int): Line number where comment should be placed\n\n"
-        f"Enforce minimum severity: {min_severity}. If below threshold, set "
-        "needs_comment=false."
-    )
-
-
-def _build_coder_prompt(hunk: DiffHunk, request: str) -> str:
-    return (
-        "You are the coding agent. Provide a concise fix snippet.\n"
-        f"File: {hunk.file_path}\n"
-        f"Diff hunk:\n{hunk.hunk}\n\n"
-        f"Task: {request}\n\n"
-        "Provide your response as a structured object with these fields:\n"
-        "- snippet (str): The code fix or implementation snippet\n"
-        "- rationale (str): Explanation of the fix"
-    )
-
 
 def _files_to_hunks(
     files: List[File], target_files: Optional[Iterable[str]]
@@ -185,7 +144,7 @@ def orchestrate(
             )
             continue
 
-        prompt = _build_reviewer_prompt(hunk, review_request.min_severity)
+        prompt = build_reviewer_prompt(hunk, review_request.min_severity)
         try:
             review = reviewer["agent"].structured_output(
                 output_model=ReviewerResponse,
@@ -203,7 +162,7 @@ def orchestrate(
         suggestion = review.suggestion
         rationale = None
         if review.ask_coder and review.coder_request:
-            coder_prompt = _build_coder_prompt(hunk, review.coder_request)
+            coder_prompt = build_coder_prompt(hunk, review.coder_request)
             try:
                 coder_resp = coder["agent"].structured_output(
                     output_model=CoderResponse,
