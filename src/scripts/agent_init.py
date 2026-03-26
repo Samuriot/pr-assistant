@@ -69,10 +69,3 @@ def setup_strands_agents(
         }
 
     return agents
-
-
-if __name__ == "__main__":
-    agents = setup_strands_agents()
-    for name, payload in agents.items():
-        print(f"Loaded agent: {name}")
-        print(f"Prompt:\n{payload['prompt']}\n")

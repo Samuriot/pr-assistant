@@ -15,12 +15,14 @@ Dependencies: strands, your existing LocalAgent wrapper, agent_init helpers.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from src.scripts.agent_init import setup_strands_agents
-from src.scripts.file_diff import File, get_file_diff
+from src.scripts.file_diff import get_file_diff
+from src.models.structured_response import CodeComment
 
 
 DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -133,13 +135,14 @@ def orchestrate(
     config_dir: Optional[Path] = None,
     dry_run: bool = False,
     max_hunks: int | None = None,
-) -> List[Dict[str, str]]:
+) -> List[CodeComment]:
     """Runs review over hunks, delegating to coding agent when asked.
 
     Returns a list of comment payloads ready to post (dicts with keys like
     file_path, line, body, severity). Posting is left to the caller.
     """
 
+    print("Initializing agents...", file=sys.stderr)
     agents = setup_strands_agents(
         config_dir=config_dir or DEFAULT_CONFIG_DIR,
         model_id=model_id,
@@ -153,7 +156,8 @@ def orchestrate(
             "Missing required agents: ensure 'Code Reviewer' and 'Coding Agent' configs exist"
         )
 
-    comments: List[Dict[str, str]] = []
+    print(f"Found {len(review_request.hunks)} hunks to review", file=sys.stderr)
+    comments: List[CodeComment] = []
 
     for idx, hunk in enumerate(review_request.hunks):
         if max_hunks is not None and idx >= max_hunks:
@@ -161,14 +165,20 @@ def orchestrate(
         if len(comments) >= review_request.max_comments:
             break
 
+        print(
+            f"Processing hunk {idx + 1}/{len(review_request.hunks)} "
+            f"({hunk.file_path}:{hunk.start_line})...",
+            file=sys.stderr,
+            flush=True,
+        )
+
         if dry_run:
             comments.append(
-                {
-                    "file_path": hunk.file_path,
-                    "line": hunk.start_line,
-                    "severity": "dry-run",
-                    "body": f"[dry-run] Would review hunk starting at line {hunk.start_line}",
-                }
+                CodeComment(
+                    file_name=hunk.file_path,
+                    line_number=hunk.start_line,
+                    review=f"[dry-run] Would review hunk starting at line {hunk.start_line}",
+                )
             )
             continue
 
@@ -207,35 +217,20 @@ def orchestrate(
         if rationale:
             body_lines.append(f"Rationale: {rationale}")
 
+        severity = review.get("severity", "minor")
+        print(f"  → Issue found: {severity.upper()}", file=sys.stderr, flush=True)
+
         comments.append(
-            {
-                "file_path": hunk.file_path,
-                "line": review.get("line") or hunk.start_line,
-                "severity": severity,
-                "body": "\n".join(body_lines).strip(),
-            }
+            CodeComment(
+                file_name=hunk.file_path,
+                line_number=review.get("line") or hunk.start_line,
+                review="\n".join(body_lines).strip(),
+            )
         )
 
-    return comments
-
-
-if __name__ == "__main__":
-    # Example stub showing how to call orchestrate; replace with real PR data.
-    sample = ReviewRequest(
-        pr_number="123",
-        repo="example/repo",
-        hunks=[
-            DiffHunk(
-                file_path="src/foo.py",
-                hunk="@@ -1,2 +1,2 @@\n-foo = 1\n+foo = 2\n",
-                start_line=1,
-                existing_comments=[],
-            )
-        ],
-        max_comments=5,
-        min_severity="minor",
+    issue_word = "issue" if len(comments) == 1 else "issues"
+    print(
+        f"Review complete: {len(comments)} {issue_word} found",
+        file=sys.stderr,
     )
-
-    out = orchestrate(sample, dry_run=True, max_hunks=1)
-    for c in out:
-        print(c)
+    return comments

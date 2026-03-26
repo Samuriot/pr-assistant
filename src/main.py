@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.scripts.orchestrate import (  # type: ignore  # resolved via sys.path
+from src.scripts.orchestrate import (
     DEFAULT_CONFIG_DIR,
     ReviewRequest,
     build_hunks_from_commit,
@@ -39,9 +39,9 @@ def _parse_args() -> argparse.Namespace:
         help="Commit-ish to diff (overrides --use-worktree)",
     )
     parser.add_argument(
-        "--run-model",
+        "--dry-run",
         action="store_true",
-        help="Call models (disable dry-run)",
+        help="Simulate review without calling models",
     )
     parser.add_argument(
         "--max-hunks",
@@ -62,10 +62,22 @@ def _parse_args() -> argparse.Namespace:
         choices=["nit", "minor", "major", "blocker"],
         help="Minimum severity to emit",
     )
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        default=None,
+        help="Override model id (else uses OLLAMA_MODEL_ID or default)",
+    )
+    parser.add_argument(
+        "--model-host",
+        type=str,
+        default=None,
+        help="Override model host (else uses OLLAMA_HOST or default)",
+    )
     return parser.parse_args()
 
 
-def main(target_files: List[str] | None = None, use_worktree: bool = True) -> None:
+def main(target_files: List[str] | None = None) -> None:
     args = _parse_args()
 
     files_arg = (
@@ -75,15 +87,13 @@ def main(target_files: List[str] | None = None, use_worktree: bool = True) -> No
     )
 
     if args.commit:
+        print(f"Extracting diffs from commit {args.commit}...", file=sys.stderr)
         hunks = build_hunks_from_commit(args.commit, target_files=files_arg)
         source_label = f"commit {args.commit}"
-    elif args.use_worktree or use_worktree:
+    else:
+        print("Extracting diffs from worktree...", file=sys.stderr)
         hunks = build_hunks_from_worktree(target_files=files_arg)
         source_label = "worktree"
-    else:
-        commit = "HEAD"
-        hunks = build_hunks_from_commit(commit, target_files=files_arg)
-        source_label = f"commit {commit}"
 
     if not hunks:
         print(
@@ -100,11 +110,16 @@ def main(target_files: List[str] | None = None, use_worktree: bool = True) -> No
         min_severity=args.min_severity,
     )
 
+    if not args.dry_run:
+        print("Starting review...", file=sys.stderr)
+
     comments = orchestrate(
         request,
         config_dir=DEFAULT_CONFIG_DIR,
-        dry_run=not args.run_model,
+        dry_run=args.dry_run,
         max_hunks=args.max_hunks,
+        model_id=args.model_id,
+        host_url=args.model_host,
     )
 
     if not comments:
@@ -112,8 +127,8 @@ def main(target_files: List[str] | None = None, use_worktree: bool = True) -> No
         return
 
     for comment in comments:
-        print(comment)
+        print(comment.model_dump())
 
 
 if __name__ == "__main__":
-    main(target_files=None, use_worktree=True)
+    main(target_files=None)
