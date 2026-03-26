@@ -17,6 +17,7 @@ from src.scripts.orchestrate import (
     build_hunks_from_worktree,
     orchestrate,
 )
+from src.scripts.github_integration import GitHubClient
 
 
 def _parse_args() -> argparse.Namespace:
@@ -74,6 +75,24 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Override model host (else uses OLLAMA_HOST or default)",
     )
+    parser.add_argument(
+        "--github-token",
+        type=str,
+        default=None,
+        help="GitHub Personal Access Token (or use GITHUB_TOKEN env var)",
+    )
+    parser.add_argument(
+        "--github-repo",
+        type=str,
+        default=None,
+        help="GitHub repository in format 'owner/repo' (required to post comments)",
+    )
+    parser.add_argument(
+        "--pr-number",
+        type=int,
+        default=None,
+        help="PR number to post comments to (requires --github-repo)",
+    )
     return parser.parse_args()
 
 
@@ -102,7 +121,7 @@ def main() -> None:
         return
 
     request = ReviewRequest(
-        pr_number="local-run",
+        pr_number=str(args.pr_number) if args.pr_number else "local-run",
         repo=str(Path.cwd()),
         hunks=hunks,
         max_comments=args.max_comments,
@@ -125,8 +144,40 @@ def main() -> None:
         print("No comments generated (dry run or no issues detected).")
         return
 
+    # Output comments as JSON for programmatic use
     for comment in comments:
         print(comment.model_dump())
+
+    # Post to GitHub if credentials and repo info provided
+    if args.github_token or args.github_repo or args.pr_number:
+        if not args.github_repo:
+            print(
+                "Error: --github-repo required to post comments. Format: owner/repo",
+                file=sys.stderr,
+            )
+            return
+
+        if not args.pr_number:
+            print(
+                "Error: --pr-number required to post comments.",
+                file=sys.stderr,
+            )
+            return
+
+        try:
+            gh_client = GitHubClient(token=args.github_token, repo=args.github_repo)
+            successful, failed = gh_client.post_comments(args.pr_number, comments)
+
+            print(
+                f"\nGitHub: Posted {successful}/{len(comments)} comments",
+                file=sys.stderr,
+            )
+            if failed > 0:
+                print(f"GitHub: {failed} comments failed to post", file=sys.stderr)
+
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
