@@ -77,13 +77,12 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main(target_files: List[str] | None = None) -> None:
+def main() -> None:
     args = _parse_args()
 
+    # Parse target files from comma-separated argument
     files_arg = (
-        [p.strip() for p in args.target_files.split(",") if p.strip()]
-        if args.target_files
-        else target_files
+        [f.strip() for f in args.target_files.split(",")] if args.target_files else None
     )
 
     if args.commit:
@@ -131,4 +130,4 @@ def main(target_files: List[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main(target_files=None)
+    main()
